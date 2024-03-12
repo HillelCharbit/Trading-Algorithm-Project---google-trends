@@ -78,6 +78,89 @@ def get_binance_historical_data(symbol, interval, start_date, end_date=None):
 
     return df
 
+# as you mentioned in the phone call, this could be problamatic to send the dataframe over and over again between the functions
+# so instead i made 1 function that excepts the dataframe and calculates apon the dataframe all of the values needed that are applied in the pseudo code below
+
+# Tom version of indicators
+def TR(close: pd.Series, high: pd.Series, low: pd.Series) -> pd.Series:
+    return (high.where(high > close.shift(1), close.shift(1)) - low.where(low < close.shift(1), close.shift(1)))
+
+def ATR(TR: pd.Series, atr_length: int) -> pd.Series:
+    return TR.rolling(window=atr_length).mean()
+
+# crossover function
+def CO(a: pd.Series, b: pd.Series) -> pd.Series:
+    return (a > b) & (a.shift(1) < b.shift(1))
+
+def UTBot(close, high, low, key_value, atr_length) -> pd.Series:
+    lossThreshold = key_value * ATR(TR(close, high, low), atr_length)
+    trailingStop = 0 * lossThreshold
+
+    for i in range(1, len(trailingStop)):
+
+        # the previous trailing stop is lower than the current and previous close
+        if (close[i] > trailingStop[i - 1]) & (close[i - 1] > trailingStop[i - 1]):
+            trailingStop[i] = max(trailingStop[i - 1], close[i] - lossThreshold[i])
+        # the previous trailing stop is higher than the current and previous close
+        elif (close[i] < trailingStop[i - 1]) & (close[i - 1] < trailingStop[i - 1]):
+            trailingStop[i] = min(trailingStop[i - 1], close[i] - lossThreshold[i])
+        # the previous trailing stop is lower than the current close and higher than the previous close
+        elif (close[i] > trailingStop[i - 1]):
+            trailingStop[i] = close[i] - lossThreshold[i]
+        # the previous trailing stop is higher than the current close and lower than the previous close
+        else:
+            trailingStop[i] = close[i] + lossThreshold[i]
+
+    above = CO(close, trailingStop)
+    below = CO(trailingStop, close)
+
+
+    Action = np.select([above, below], [ActionType.BUY, ActionType.SELL], default=ActionType.DONOTHING)
+    
+
+    # check if works properly!!!!!!
+    return Action
+
+# smoothing function
+def SmoothSrs(srs, smoothing_f):
+    smoothed_srs = srs.copy()
+    for i in range(1, len(smoothed_srs)):
+        if np.isnan(smoothed_srs[i-1]):
+            smoothed_srs[i] = srs[i]
+        else:
+            smoothed_srs[i] = smoothed_srs[i-1] + smoothing_f * (srs[i] - smoothed_srs[i-1])
+    return smoothed_srs
+
+# normalization function with smoothing
+def normNsmooth(srs, stc_length, smoothing_factor):
+    # finding the lowest and highest range
+    lowest = srs.rolling(stc_length).min()
+    highestRange = srs.rolling(stc_length).max() - lowest
+    
+    # normalizing srs
+    normalizedsrs = srs.copy()
+    normalizedsrs[highestRange > 0] = ((srs - lowest) / highestRange * 100)*(highestRange > 0)
+    normalizedsrs[highestRange <= 0] = np.nan
+    normalizedsrs.fillna(method = 'ffill', inplace = True)
+
+    # smoothing the srs
+    return SmoothSrs(normalizedsrs, smoothing_factor)
+
+# complete function for calculating osciallatior
+def STCosi(srs, fast_length, slow_length, stc_length, smoothing_factor = 0.5):
+    
+    # ema calculation for fast and slow length's
+    fast_ema = srs.ewm(span = fast_length).mean()
+    slow_ema = srs.ewm(span = slow_length).mean()
+
+    # MacdDiff calculation
+    MacdDiff = fast_ema - slow_ema
+
+    smoothedMacd = normNsmooth(MacdDiff, stc_length, smoothing_factor)
+    FinalSTC = normNsmooth(smoothedMacd, stc_length, smoothing_factor)
+    
+    return FinalSTC
+
 def calc_TR(df) -> pd.DataFrame:
     df['prev_close'] = df['close'].shift(1)
 
@@ -121,17 +204,19 @@ def calc_UTBot(df, key_value, atr_length):
     df['sell'] = df.crossover_below.astype(int)
     return df
 
-
+# done in STCosi
 def EMACalc(df, length, target_col_name):
     df[target_col_name] = df['close'].ewm(span=length,min_periods=length, adjust=False).mean()
     return df
 
+# done in STCosi
 def MacdDiff(df, fast_length, slow_length):
     EMACalc(df, fast_length, 'fastEMA')
     EMACalc(df, slow_length, 'slowEMA')
     df['macd_diff'] = df['fastEMA'] - df['slowEMA']
     return df
 
+# made a function for use in STCosi
 def smooth_srs(srs, smoothing_f):
     smoothed_srs = []
     smoothed_srs[0] = srs[0]
@@ -144,6 +229,7 @@ def smooth_srs(srs, smoothing_f):
             smoothed_srs[i] = smoothed_srs[i-1] + smoothing_f * (srs[i] - smoothed_srs[i-1])
     return smoothed_srs
 
+# done in STCosi
 def NormalizeSmoothSrs(series, window_length, smoothing_f):
     lowest = series.rolling(window_length).min()
     highest_range = series.rolling(window_length).max() - lowest
@@ -177,7 +263,8 @@ def main():
 
     df = get_binance_historical_data('BTCUSDT', '30m', start_date, end_date)
     ut_bot = calc_ut_bot(df.copy())
-    # osi = calc_osi(df.copy())
+    # need to change parameters for them not being magic numbers
+    osi = STCosi(df.close, 23, 50, 10, 0.5)
 
 
 if __name__ == '__main__':
