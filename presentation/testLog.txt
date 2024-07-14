@@ -1,3 +1,0 @@
-total_return annualized_return annualized_sharpe sortino_ratio max_drawdown calmar_ratio
-tr 3.75% ar 3.77% as 0.21 sr 0.42 md 12.55% cr 0.30
-tr 163.83% ar 165.24% as 0.36 sr 0.86 md 95.51% cr 1.73
